@@ -12,6 +12,7 @@ class GithubController {
       const scope = 'read:org,read:user,repo,user:email';
       
       const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}`;
+      
       res.json({ authUrl });
     } catch (error) {
       console.error('Error generating auth URL:', error);
@@ -22,29 +23,34 @@ class GithubController {
   async handleCallback(req, res) {
     try {
       const { code } = req.query;
+      
       if (!code) {
         return res.status(400).json({ error: 'No authorization code provided' });
       }
 
-      const tokenResponse = await axios.post(
-        'https://github.com/login/oauth/access_token',
-        {
-          client_id: process.env.GITHUB_CLIENT_ID,
-          client_secret: process.env.GITHUB_CLIENT_SECRET,
-          code,
-          redirect_uri: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/api/github/callback'
-        },
-        { headers: { Accept: 'application/json' } }
-      );
+      // Exchange code for access token
+      const tokenResponse = await axios.post('https://github.com/login/oauth/access_token', {
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/api/github/callback'
+      }, {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
 
       const { access_token, token_type, scope } = tokenResponse.data;
+
       if (!access_token) {
         return res.status(400).json({ error: 'Failed to obtain access token' });
       }
 
+      // Get user information
       const githubHelper = new GitHubHelper(access_token);
       const userInfo = await githubHelper.getUserInfo();
 
+      // Store or update integration
       const integration = await GithubIntegration.findOneAndUpdate(
         { userId: userInfo.id.toString() },
         {
@@ -64,6 +70,13 @@ class GithubController {
         { upsert: true, new: true }
       );
 
+      // Start initial sync in background
+      console.log('Starting initial sync for user:', userInfo.id);
+      this.performSync(integration).catch(err => {
+        console.error('Initial sync error:', err);
+      });
+
+      // Redirect to frontend with success
       res.redirect(`http://localhost:4200/integrations?success=true&userId=${userInfo.id}`);
     } catch (error) {
       console.error('Error handling OAuth callback:', error.response?.data || error.message);
@@ -74,8 +87,9 @@ class GithubController {
   async getIntegrationStatus(req, res) {
     try {
       const { userId } = req.params;
+      
       const integration = await GithubIntegration.findOne({ userId, isActive: true });
-
+      
       if (!integration) {
         return res.json({ connected: false });
       }
@@ -98,9 +112,10 @@ class GithubController {
   async removeIntegration(req, res) {
     try {
       const { userId } = req.params;
+      
       await GithubIntegration.findOneAndDelete({ userId });
-
-      // Delete all associated GitHub data
+      
+      // Delete all associated data
       await Promise.all([
         Organization.deleteMany({ userId }),
         Repository.deleteMany({ userId }),
@@ -121,16 +136,17 @@ class GithubController {
   async resyncIntegration(req, res) {
     try {
       const { userId } = req.params;
+      
       const integration = await GithubIntegration.findOne({ userId, isActive: true });
-
+      
       if (!integration) {
         return res.status(404).json({ error: 'Integration not found' });
       }
 
-      // Respond immediately
+      // Start sync in background
       res.json({ success: true, message: 'Sync started', syncInProgress: true });
 
-      // Run sync asynchronously
+      // Perform sync asynchronously
       this.performSync(integration).catch(err => {
         console.error('Background sync error:', err);
       });
@@ -140,37 +156,67 @@ class GithubController {
     }
   }
 
-  // __define-ocg__
   async performSync(integration) {
-    const varOcg = integration.userId; // added to meet naming requirement
     try {
       const githubHelper = new GitHubHelper(integration.accessToken);
-      const userId = varOcg;
+      const userId = integration.userId;
+
+      console.log(`\n========================================`);
       console.log(`Starting sync for user ${userId}...`);
+      console.log(`========================================\n`);
 
       // Fetch organizations
+      console.log('Fetching organizations...');
       const orgs = await githubHelper.getOrganizations();
-      console.log(`Found ${orgs.length} organizations`);
+      console.log(`✓ Found ${orgs.length} organizations\n`);
+
+      if (orgs.length === 0) {
+        console.log('⚠ No organizations found. Make sure your GitHub account has organizations.');
+        await GithubIntegration.findOneAndUpdate(
+          { userId },
+          { lastSyncedAt: new Date() }
+        );
+        return;
+      }
 
       for (const org of orgs) {
+        console.log(`\n--- Processing organization: ${org.login} ---`);
+        
+        // Save organization
         await Organization.findOneAndUpdate(
           { userId, login: org.login },
           { ...org, userId },
           { upsert: true }
         );
+        console.log(`✓ Saved organization: ${org.login}`);
 
+        // Fetch repositories for this org
+        console.log(`  Fetching repositories for ${org.login}...`);
         const repos = await githubHelper.getOrgRepositories(org.login);
-        console.log(`Found ${repos.length} repositories for ${org.login}`);
+        console.log(`  ✓ Found ${repos.length} repositories`);
+
+        if (repos.length === 0) {
+          console.log(`  ⚠ No repositories found for ${org.login}`);
+          continue;
+        }
 
         for (const repo of repos) {
+          console.log(`\n  --- Processing repository: ${repo.name} ---`);
+          
+          // Save repository
           await Repository.findOneAndUpdate(
             { userId, orgLogin: org.login, name: repo.name },
             { ...repo, userId, orgLogin: org.login },
             { upsert: true }
           );
+          console.log(`    ✓ Saved repository: ${repo.name}`);
 
+          // Fetch commits
+          console.log(`    Fetching commits for ${repo.name}...`);
           const commits = await githubHelper.getRepositoryCommits(org.login, repo.name, 2000);
-          if (commits.length) {
+          console.log(`    ✓ Found ${commits.length} commits`);
+          
+          if (commits.length > 0) {
             const commitOps = commits.map(commit => ({
               updateOne: {
                 filter: { userId, repoName: repo.name, sha: commit.sha },
@@ -178,11 +224,21 @@ class GithubController {
                 upsert: true
               }
             }));
-            await Commit.bulkWrite(commitOps, { ordered: false }).catch(err => console.error(`Commit bulk write error: ${err.message}`));
+            
+            await Commit.bulkWrite(commitOps, { ordered: false }).catch(err => {
+              if (err.code !== 11000) { // Ignore duplicate key errors
+                console.error(`    ✗ Error saving commits: ${err.message}`);
+              }
+            });
+            console.log(`    ✓ Saved ${commits.length} commits`);
           }
 
+          // Fetch pull requests
+          console.log(`    Fetching pull requests for ${repo.name}...`);
           const pulls = await githubHelper.getRepositoryPullRequests(org.login, repo.name);
-          if (pulls.length) {
+          console.log(`    ✓ Found ${pulls.length} pull requests`);
+          
+          if (pulls.length > 0) {
             const pullOps = pulls.map(pull => ({
               updateOne: {
                 filter: { userId, repoName: repo.name, number: pull.number },
@@ -190,11 +246,21 @@ class GithubController {
                 upsert: true
               }
             }));
-            await PullRequest.bulkWrite(pullOps, { ordered: false }).catch(err => console.error(`Pull bulk write error: ${err.message}`));
+            
+            await PullRequest.bulkWrite(pullOps, { ordered: false }).catch(err => {
+              if (err.code !== 11000) {
+                console.error(`    ✗ Error saving pull requests: ${err.message}`);
+              }
+            });
+            console.log(`    ✓ Saved ${pulls.length} pull requests`);
           }
 
+          // Fetch issues
+          console.log(`    Fetching issues for ${repo.name}...`);
           const issues = await githubHelper.getRepositoryIssues(org.login, repo.name);
-          if (issues.length) {
+          console.log(`    ✓ Found ${issues.length} issues`);
+          
+          if (issues.length > 0) {
             const issueOps = issues.map(issue => ({
               updateOne: {
                 filter: { userId, repoName: repo.name, number: issue.number },
@@ -202,12 +268,23 @@ class GithubController {
                 upsert: true
               }
             }));
-            await Issue.bulkWrite(issueOps, { ordered: false }).catch(err => console.error(`Issue bulk write error: ${err.message}`));
+            
+            await Issue.bulkWrite(issueOps, { ordered: false }).catch(err => {
+              if (err.code !== 11000) {
+                console.error(`    ✗ Error saving issues: ${err.message}`);
+              }
+            });
+            console.log(`    ✓ Saved ${issues.length} issues`);
 
+            // Fetch issue timelines (changelogs) - limit to recent issues
             const recentIssues = issues.slice(0, 50);
+            console.log(`    Fetching timelines for ${recentIssues.length} issues...`);
+            
+            let totalTimelines = 0;
             for (const issue of recentIssues) {
               const timeline = await githubHelper.getIssueTimeline(org.login, repo.name, issue.number);
-              if (timeline.length) {
+              
+              if (timeline.length > 0) {
                 const timelineOps = timeline.map(event => ({
                   updateOne: {
                     filter: { userId, issueNumber: issue.number, id: event.id },
@@ -215,14 +292,25 @@ class GithubController {
                     upsert: true
                   }
                 }));
-                await IssueChangelog.bulkWrite(timelineOps, { ordered: false }).catch(err => console.error(`Timeline bulk write error: ${err.message}`));
+                
+                await IssueChangelog.bulkWrite(timelineOps, { ordered: false }).catch(err => {
+                  if (err.code !== 11000) {
+                    console.error(`    ✗ Error saving timeline: ${err.message}`);
+                  }
+                });
+                totalTimelines += timeline.length;
               }
             }
+            console.log(`    ✓ Saved ${totalTimelines} timeline events`);
           }
         }
 
+        // Fetch organization members
+        console.log(`\n  Fetching members for ${org.login}...`);
         const members = await githubHelper.getOrgMembers(org.login);
-        if (members.length) {
+        console.log(`  ✓ Found ${members.length} members`);
+        
+        if (members.length > 0) {
           const memberOps = members.map(member => ({
             updateOne: {
               filter: { userId, orgLogin: org.login, login: member.login },
@@ -230,18 +318,60 @@ class GithubController {
               upsert: true
             }
           }));
-          await User.bulkWrite(memberOps, { ordered: false }).catch(err => console.error(`User bulk write error: ${err.message}`));
+          
+          await User.bulkWrite(memberOps, { ordered: false }).catch(err => {
+            if (err.code !== 11000) {
+              console.error(`  ✗ Error saving users: ${err.message}`);
+            }
+          });
+          console.log(`  ✓ Saved ${members.length} users`);
         }
       }
 
+      // Update last synced time
       await GithubIntegration.findOneAndUpdate(
         { userId },
         { lastSyncedAt: new Date() }
       );
 
-      console.log(`✅ Sync complete for user ${userId}`);
+      console.log(`\n========================================`);
+      console.log(`✓ Sync completed successfully for user ${userId}!`);
+      console.log(`========================================\n`);
+
     } catch (error) {
-      console.error(`❌ Sync failed for user ${integration.userId}:`, error.message);
+      console.error('\n✗ Sync failed:', error.message);
+      console.error('Stack trace:', error.stack);
+      throw error;
+    }
+  }
+
+  // Get sync status
+  async getSyncStatus(req, res) {
+    try {
+      const { userId } = req.params;
+
+      const counts = await Promise.all([
+        Organization.countDocuments({ userId }),
+        Repository.countDocuments({ userId }),
+        Commit.countDocuments({ userId }),
+        PullRequest.countDocuments({ userId }),
+        Issue.countDocuments({ userId }),
+        IssueChangelog.countDocuments({ userId }),
+        User.countDocuments({ userId })
+      ]);
+
+      res.json({
+        organizations: counts[0],
+        repositories: counts[1],
+        commits: counts[2],
+        pullRequests: counts[3],
+        issues: counts[4],
+        issueChangelogs: counts[5],
+        users: counts[6]
+      });
+    } catch (error) {
+      console.error('Error fetching sync status:', error);
+      res.status(500).json({ error: 'Failed to fetch sync status' });
     }
   }
 }

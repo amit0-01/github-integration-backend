@@ -12,5 +12,6 @@ router.get('/callback', (req, res) => githubController.handleCallback(req, res))
 router.get('/status/:userId', (req, res) => githubController.getIntegrationStatus(req, res));
 router.delete('/integration/:userId', (req, res) => githubController.removeIntegration(req, res));
 router.post('/resync/:userId', (req, res) => githubController.resyncIntegration(req, res));
+router.get('/sync-status/:userId', (req, res) => githubController.getSyncStatus(req, res));
 
 module.exports = router;
