@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 require('dotenv').config();
 const connectDB = require('./db').default;
-
+const errorHandler = require('./middleware/error.middleware'); 
 
 const app = express();
 
@@ -34,15 +34,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.status || 500).json({
-    error: {
-      message: err.message || 'Internal Server Error',
-      status: err.status || 500
-    }
-  });
-});
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 
