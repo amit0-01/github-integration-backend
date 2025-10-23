@@ -4,7 +4,6 @@ const GitHubHelper = require('../helpers/github.helper');
 const { Organization, Repository, Commit, PullRequest, Issue, IssueChangelog, User } = require('../models/githubdata');
 
 class GithubController {
-  // OAuth flow
   async getAuthUrl(req, res) {
     try {
       const clientId = process.env.GITHUB_CLIENT_ID;
@@ -28,7 +27,6 @@ class GithubController {
         return res.status(400).json({ error: 'No authorization code provided' });
       }
 
-      // Exchange code for access token
       const tokenResponse = await axios.post('https://github.com/login/oauth/access_token', {
         client_id: process.env.GITHUB_CLIENT_ID,
         client_secret: process.env.GITHUB_CLIENT_SECRET,
@@ -46,11 +44,9 @@ class GithubController {
         return res.status(400).json({ error: 'Failed to obtain access token' });
       }
 
-      // Get user information
       const githubHelper = new GitHubHelper(access_token);
       const userInfo = await githubHelper.getUserInfo();
 
-      // Store or update integration
       const integration = await GithubIntegration.findOneAndUpdate(
         { userId: userInfo.id.toString() },
         {
@@ -70,13 +66,11 @@ class GithubController {
         { upsert: true, new: true }
       );
 
-      // Start initial sync in background
       console.log('Starting initial sync for user:', userInfo.id);
       this.performSync(integration).catch(err => {
         console.error('Initial sync error:', err);
       });
 
-      // Redirect to frontend with success
       res.redirect(`http://localhost:4200/integrations?success=true&userId=${userInfo.id}`);
     } catch (error) {
       console.error('Error handling OAuth callback:', error.response?.data || error.message);
@@ -115,7 +109,6 @@ class GithubController {
       
       await GithubIntegration.findOneAndDelete({ userId });
       
-      // Delete all associated data
       await Promise.all([
         Organization.deleteMany({ userId }),
         Repository.deleteMany({ userId }),
@@ -143,10 +136,8 @@ class GithubController {
         return res.status(404).json({ error: 'Integration not found' });
       }
 
-      // Start sync in background
       res.json({ success: true, message: 'Sync started', syncInProgress: true });
 
-      // Perform sync asynchronously
       this.performSync(integration).catch(err => {
         console.error('Background sync error:', err);
       });
@@ -161,14 +152,7 @@ class GithubController {
       const githubHelper = new GitHubHelper(integration.accessToken);
       const userId = integration.userId;
 
-      console.log(`\n========================================`);
-      console.log(`Starting sync for user ${userId}...`);
-      console.log(`========================================\n`);
-
-      // Fetch organizations
-      console.log('Fetching organizations...');
       const orgs = await githubHelper.getOrganizations();
-      console.log(`✓ Found ${orgs.length} organizations\n`);
 
       if (orgs.length === 0) {
         console.log('⚠ No organizations found. Make sure your GitHub account has organizations.');
@@ -180,7 +164,6 @@ class GithubController {
       }
 
       for (const org of orgs) {
-        console.log(`\n--- Processing organization: ${org.login} ---`);
         
         // Save organization
         await Organization.findOneAndUpdate(
@@ -188,12 +171,8 @@ class GithubController {
           { ...org, userId },
           { upsert: true }
         );
-        console.log(`✓ Saved organization: ${org.login}`);
 
-        // Fetch repositories for this org
-        console.log(`  Fetching repositories for ${org.login}...`);
         const repos = await githubHelper.getOrgRepositories(org.login);
-        console.log(`  ✓ Found ${repos.length} repositories`);
 
         if (repos.length === 0) {
           console.log(`  ⚠ No repositories found for ${org.login}`);
@@ -201,7 +180,6 @@ class GithubController {
         }
 
         for (const repo of repos) {
-          console.log(`\n  --- Processing repository: ${repo.name} ---`);
           
           // Save repository
           await Repository.findOneAndUpdate(
@@ -209,12 +187,9 @@ class GithubController {
             { ...repo, userId, orgLogin: org.login },
             { upsert: true }
           );
-          console.log(`    ✓ Saved repository: ${repo.name}`);
 
-          // Fetch commits
-          console.log(`    Fetching commits for ${repo.name}...`);
+
           const commits = await githubHelper.getRepositoryCommits(org.login, repo.name, 2000);
-          console.log(`    ✓ Found ${commits.length} commits`);
           
           if (commits.length > 0) {
             const commitOps = commits.map(commit => ({
@@ -230,13 +205,10 @@ class GithubController {
                 console.error(`    ✗ Error saving commits: ${err.message}`);
               }
             });
-            console.log(`    ✓ Saved ${commits.length} commits`);
           }
 
-          // Fetch pull requests
-          console.log(`    Fetching pull requests for ${repo.name}...`);
+         
           const pulls = await githubHelper.getRepositoryPullRequests(org.login, repo.name);
-          console.log(`    ✓ Found ${pulls.length} pull requests`);
           
           if (pulls.length > 0) {
             const pullOps = pulls.map(pull => ({
@@ -252,13 +224,10 @@ class GithubController {
                 console.error(`    ✗ Error saving pull requests: ${err.message}`);
               }
             });
-            console.log(`    ✓ Saved ${pulls.length} pull requests`);
           }
 
-          // Fetch issues
-          console.log(`    Fetching issues for ${repo.name}...`);
+          console.log(`Fetching issues for ${repo.name}...`);
           const issues = await githubHelper.getRepositoryIssues(org.login, repo.name);
-          console.log(`    ✓ Found ${issues.length} issues`);
           
           if (issues.length > 0) {
             const issueOps = issues.map(issue => ({
@@ -271,14 +240,12 @@ class GithubController {
             
             await Issue.bulkWrite(issueOps, { ordered: false }).catch(err => {
               if (err.code !== 11000) {
-                console.error(`    ✗ Error saving issues: ${err.message}`);
+                console.error(`Error saving issues: ${err.message}`);
               }
             });
-            console.log(`    ✓ Saved ${issues.length} issues`);
 
-            // Fetch issue timelines (changelogs) - limit to recent issues
             const recentIssues = issues.slice(0, 50);
-            console.log(`    Fetching timelines for ${recentIssues.length} issues...`);
+            console.log(`Fetching timelines for ${recentIssues.length} issues...`);
             
             let totalTimelines = 0;
             for (const issue of recentIssues) {
@@ -301,14 +268,11 @@ class GithubController {
                 totalTimelines += timeline.length;
               }
             }
-            console.log(`    ✓ Saved ${totalTimelines} timeline events`);
           }
         }
 
         // Fetch organization members
-        console.log(`\n  Fetching members for ${org.login}...`);
         const members = await githubHelper.getOrgMembers(org.login);
-        console.log(`  ✓ Found ${members.length} members`);
         
         if (members.length > 0) {
           const memberOps = members.map(member => ({
@@ -321,10 +285,9 @@ class GithubController {
           
           await User.bulkWrite(memberOps, { ordered: false }).catch(err => {
             if (err.code !== 11000) {
-              console.error(`  ✗ Error saving users: ${err.message}`);
+              console.error(`Error saving users: ${err.message}`);
             }
           });
-          console.log(`  ✓ Saved ${members.length} users`);
         }
       }
 
@@ -334,13 +297,10 @@ class GithubController {
         { lastSyncedAt: new Date() }
       );
 
-      console.log(`\n========================================`);
       console.log(`✓ Sync completed successfully for user ${userId}!`);
-      console.log(`========================================\n`);
 
     } catch (error) {
-      console.error('\n✗ Sync failed:', error.message);
-      console.error('Stack trace:', error.stack);
+      console.error('Sync failed:', error.message);
       throw error;
     }
   }

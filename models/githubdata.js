@@ -166,7 +166,7 @@ const issueSchema = new mongoose.Schema({
   state_reason: String
 }, { timestamps: true, strict: false });
 
-// Issue Changelogs (Timeline Events)
+// Issue Changelogs 
 const issueChangelogSchema = new mongoose.Schema({
   userId: String,
   orgLogin: String,

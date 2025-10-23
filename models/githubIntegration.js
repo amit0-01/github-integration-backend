@@ -33,7 +33,6 @@ const githubIntegrationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
 githubIntegrationSchema.index({ userId: 1 });
 githubIntegrationSchema.index({ username: 1 });
 

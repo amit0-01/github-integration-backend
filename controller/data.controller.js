@@ -41,15 +41,12 @@ class DataController {
         return res.status(404).json({ error: 'Collection not found' });
       }
 
-      // Build query
       let query = {};
 
-      // Apply filters
       if (Object.keys(filters).length > 0) {
         Object.keys(filters).forEach(key => {
           const filterValue = filters[key];
           if (filterValue !== null && filterValue !== undefined && filterValue !== '') {
-            // Handle different filter types
             if (typeof filterValue === 'object' && filterValue.type) {
               switch (filterValue.type) {
                 case 'contains':
@@ -74,14 +71,12 @@ class DataController {
                   query[key] = { $regex: filterValue.value, $options: 'i' };
               }
             } else {
-              // Simple text filter
               query[key] = { $regex: filterValue, $options: 'i' };
             }
           }
         });
       }
 
-      // Apply global search
       if (searchTerm) {
         const sampleDoc = await Model.findOne().lean();
         if (sampleDoc) {
@@ -92,10 +87,8 @@ class DataController {
         }
       }
 
-      // Count total documents
       const totalCount = await Model.countDocuments(query);
 
-      // Build sort
       let sort = {};
       if (sortField) {
         sort[sortField] = sortOrder === 'desc' ? -1 : 1;
@@ -103,7 +96,6 @@ class DataController {
         sort = { createdAt: -1 };
       }
 
-      // Execute query with pagination
       const skip = (page - 1) * pageSize;
       const data = await Model.find(query)
         .sort(sort)
@@ -111,7 +103,6 @@ class DataController {
         .limit(pageSize)
         .lean();
 
-      // Get field definitions from first document
       let fields = [];
       if (data.length > 0) {
         fields = this.extractFields(data[0]);
@@ -149,7 +140,6 @@ class DataController {
         const Model = this.collectionMap[collectionName];
         if (!Model) continue;
 
-        // Get sample document to determine searchable fields
         const sampleDoc = await Model.findOne().lean();
         if (!sampleDoc) continue;
 
@@ -193,10 +183,8 @@ class DataController {
         fields.push({ field: fullKey, type: 'string' });
       } else if (Array.isArray(value)) {
         fields.push({ field: fullKey, type: 'array' });
-        // Don't recurse into arrays for column generation
       } else if (typeof value === 'object' && !(value instanceof Date)) {
         fields.push({ field: fullKey, type: 'object' });
-        // Don't recurse into nested objects for column generation
       } else if (value instanceof Date) {
         fields.push({ field: fullKey, type: 'date' });
       } else if (typeof value === 'number') {
@@ -214,7 +202,6 @@ class DataController {
   getSearchableFields(obj, prefix = '', depth = 0) {
     let fields = [];
     
-    // Limit depth to avoid deep nesting
     if (depth > 2) return fields;
     
     for (const key in obj) {
@@ -226,7 +213,6 @@ class DataController {
       if (typeof value === 'string' || typeof value === 'number') {
         fields.push(fullKey);
       } else if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
-        // Recurse into nested objects (limited depth)
         const nestedFields = this.getSearchableFields(value, fullKey, depth + 1);
         fields.push(...nestedFields);
       }

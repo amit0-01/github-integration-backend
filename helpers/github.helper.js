@@ -26,7 +26,6 @@ class GitHubHelper {
 
   async getOrganizations() {
     try {
-      console.log('  → Calling GitHub API: GET /user/orgs');
       const orgs = [];
       let page = 1;
       let hasMore = true;
@@ -42,11 +41,8 @@ class GitHubHelper {
         page++;
       }
 
-      console.log(`  → Total organizations from /user/orgs: ${orgs.length}`);
 
-      // If no organizations found, try fetching user's own organizations via installations
       if (orgs.length === 0) {
-        console.log('  → Trying alternative: Fetching user installations...');
         try {
           const installResponse = await this.client.get('/user/installations', {
             headers: {
@@ -55,20 +51,16 @@ class GitHubHelper {
           });
           
           if (installResponse.data.installations) {
-            console.log(`  → Found ${installResponse.data.installations.length} installations`);
           }
         } catch (err) {
-          console.log('  → Could not fetch installations:', err.response?.status);
+          console.log('Could not fetch installations:', err.response?.status);
         }
 
-        // Try fetching organizations the user created/owns
-        console.log('  → Trying alternative: Checking user profile for owned orgs...');
+
         const userInfo = await this.getUserInfo();
-        console.log('  → User login:', userInfo.login);
+        console.log('User login:', userInfo.login);
         
-        // For personal accounts, we might need to list repositories instead
-        // and extract unique organizations from there
-        console.log('  → Fetching user repositories to find organizations...');
+
         const repos = await this.getUserRepositories();
         const orgLogins = new Set();
         
@@ -78,31 +70,24 @@ class GitHubHelper {
           }
         });
 
-        console.log(`  → Found ${orgLogins.size} unique organizations from repositories`);
 
-        // Fetch detailed info for each organization
         for (const orgLogin of orgLogins) {
           try {
             const orgResponse = await this.client.get(`/orgs/${orgLogin}`);
             orgs.push(orgResponse.data);
-            console.log(`  → Added organization: ${orgLogin}`);
           } catch (err) {
-            console.log(`  → Could not fetch org ${orgLogin}:`, err.response?.status);
+            console.log(`Could not fetch org ${orgLogin}:`, err.response?.status);
           }
         }
       } else {
-        // Get detailed info for each org
-        console.log('  → Fetching detailed information for each organization...');
         const detailedOrgs = await Promise.all(
           orgs.map(org => 
             this.client.get(`/orgs/${org.login}`)
               .then(res => {
-                console.log(`  → Fetched details for: ${org.login}`);
                 return res.data;
               })
               .catch(err => {
-                console.log(`  → Error fetching ${org.login}:`, err.response?.status);
-                return org; // Return basic info if detailed fetch fails
+                return org; 
               })
           )
         );
@@ -114,7 +99,6 @@ class GitHubHelper {
       console.error('Error fetching organizations:', error.response?.data || error.message);
       if (error.response) {
         console.error('Response status:', error.response.status);
-        console.error('Response headers:', error.response.headers);
       }
       throw error;
     }
@@ -126,7 +110,6 @@ class GitHubHelper {
       let page = 1;
       let hasMore = true;
 
-      // First, get all repos with affiliation (don't use 'type' with 'affiliation')
       while (hasMore) {
         const response = await this.client.get('/user/repos', {
           params: { 
@@ -138,7 +121,6 @@ class GitHubHelper {
           }
         });
         
-        console.log(`  → Page ${page}: Found ${response.data.length} repositories`);
         repos.push(...response.data);
         hasMore = response.data.length === 100;
         page++;
@@ -146,14 +128,10 @@ class GitHubHelper {
         if (hasMore) await this.delay(100);
       }
 
-      console.log(`  → Total repositories fetched: ${repos.length}`);
       return repos;
     } catch (error) {
-      console.error('Error fetching user repositories:', error.response?.data || error.message);
-      
-      // Fallback: try without affiliation parameter
+
       try {
-        console.log('  → Retrying without affiliation parameter...');
         const repos = [];
         let page = 1;
         let hasMore = true;
@@ -168,7 +146,6 @@ class GitHubHelper {
             }
           });
           
-          console.log(`  → Page ${page}: Found ${response.data.length} repositories`);
           repos.push(...response.data);
           hasMore = response.data.length === 100;
           page++;
@@ -176,7 +153,6 @@ class GitHubHelper {
           if (hasMore) await this.delay(100);
         }
 
-        console.log(`  → Total repositories fetched: ${repos.length}`);
         return repos;
       } catch (fallbackError) {
         console.error('Fallback also failed:', fallbackError.response?.data || fallbackError.message);
@@ -187,7 +163,6 @@ class GitHubHelper {
 
   async getOrgRepositories(orgLogin) {
     try {
-      console.log(`    → Fetching repos for organization: ${orgLogin}`);
       const repos = [];
       let page = 1;
       let hasMore = true;
@@ -273,7 +248,6 @@ class GitHubHelper {
           params: { per_page: 100, page, state: 'all' }
         });
         
-        // Filter out pull requests (they're also returned in issues endpoint)
         const pureIssues = response.data.filter(issue => !issue.pull_request);
         issues.push(...pureIssues);
         
@@ -338,7 +312,6 @@ class GitHubHelper {
         if (hasMore) await this.delay(100);
       }
 
-      // Get detailed info for each member
       const detailedMembers = await Promise.all(
         members.map(member => 
           this.client.get(`/users/${member.login}`)
