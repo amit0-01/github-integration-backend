@@ -210,9 +210,10 @@ class DataController {
       const value = obj[key];
       const fullKey = prefix ? `${prefix}.${key}` : key;
       
-      if (typeof value === 'string' || typeof value === 'number') {
-        fields.push(fullKey);
-      } else if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      if (typeof value === 'string') {
+        fields.push(fullKey); 
+      } 
+      else if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
         const nestedFields = this.getSearchableFields(value, fullKey, depth + 1);
         fields.push(...nestedFields);
       }
